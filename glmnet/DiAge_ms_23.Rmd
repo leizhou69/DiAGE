@@ -1,0 +1,412 @@
+---
+title: "R Notebook for reporting DiAge in the transcriptomic paper"
+output: html_notebook
+---
+# A. set up working space
+```{r}
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path)) ## file in /ZhouLabTeamFolder/Projects/SD_III/Aging/DiAge/DiAge_git/
+```
+
+
+```{r}
+# Libraries Needed
+library(caret)
+library(glmnet)
+library(mlbench)
+library(psych)
+library(ggplot2)
+library(dplyr)
+library(data.table)
+```
+
+# B. Dataset summary
+
+## B.1 read in data
+```{r}
+SR_AllGex_Normal<-read.csv("./datasets/SRR_AllGex_Normal.csv",check.names = FALSE) 
+colnames(SR_AllGex_Normal)[1:25]
+colnames(SR_AllGex_Normal)[13680:13685]
+
+```
+## B.2 Data distribution -histogram by Age
+```{r}
+nrow(SR_AllGex_Normal)
+table(SR_AllGex_Normal$Sex)  ## summary of sex distribution
+summary(SR_AllGex_Normal$Age)
+ggplot(SR_AllGex_Normal, aes(x=Age)) +
+  geom_histogram(binwidth = 7,fill="white", colour="black", boundary=0)+
+  theme_bw()+
+  theme(axis.title=element_text(face="bold", color="black", size = 14)) +
+  theme(axis.text=element_text(face="bold", size = 12)) +
+  xlab("Age (days) ") +
+  ylab("Count") +
+  annotate("text", x=45, y= 157, label="Dataset used for ML", size=7, fontface="bold.italic") +
+  annotate("text", x=45, y= 127, label="(Average age ~ 17 days)", size=7, fontface="bold.italic")
+    
+
+```
+
+#### B.3 Data distribution -Sex
+```{r}
+table(SR_AllGex_Normal$Sex)
+summary(SR_AllGex_Normal$Age)
+```
+
+
+
+
+
+# C.Modeling with glmnet 
+
+##C.1 Training function  
+## the function takes a AgeGexdata which has one Age column followed by gene columns
+## the methods is one of lm (linear model);ridge; lasso; en(elastic net); 
+
+```{r}
+glmTraining<-function (AgeGexdata, T_method,folds,reps){
+  
+# Data Partition
+set.seed(1)
+ind <- sample(2, nrow(AgeGexdata), replace = T, prob = c(0.7, 0.3))
+train <- AgeGexdata[ind==1,]
+test <- AgeGexdata[ind==2,]
+
+# Custom Control Parameters
+custom <- trainControl(method = "repeatedcv",
+                       number = folds,  ### number of folds
+                       repeats = reps,  ### number of repearts
+                       verboseIter = T)
+set.seed(1234)
+
+if (T_method=='lm'){
+       #linear model
+       lm=lm <- train(Age ~ .,
+            train,
+            method ='lm',
+            trControl=custom)
+       return(lm)
+}
+
+       else if (T_method=='ridge'){
+         ridge <- train(Age ~ .,
+               train,
+               method ='glmnet',
+               tuneGrid= expand.grid(alpha=0,
+                                     lambda=seq(0.00001, 1, length=10)),
+               trControl=custom)
+         return(ridge)
+}
+       
+       else if (T_method=='lasso'){
+         lasso <- train(Age ~ .,
+               train,
+               method ='glmnet',
+               tuneGrid= expand.grid(alpha=1,
+                                     lambda=seq(0.00001, 1, length=10)),
+               trControl=custom)
+         return(lasso)
+}
+
+       else if (T_method=='en'){
+         en <-  train(Age ~ .,
+             train,
+             method ='glmnet',
+             tuneGrid= expand.grid(alpha= seq(0,1,length=10),
+                                   lambda=seq(0,1, length=10)),
+             trControl=custom)
+         return(en)
+}
+ else       
+       { print("Unknown method"); return(NULL) }
+}
+
+```
+
+
+ 
+##C.2 Modeling
+
+### C.2a Whole Genome (WGnm or all)
+```{r}
+#Normal_all_minmax<-read.csv("./datasets/Normal_all_minmax.csv")
+en_all_minmax=glmTraining (Normal_all_minmax,'en', 10, 5)
+# Ridge_all1=glmTraining (Normal_MinMax,'ridge', 10, 5)
+# Lasso_all1=glmTraining (Normal_MinMax,'lasso', 10, 5)
+
+en_all_lg2=glmTraining(Normal_all_lg2,'en', 10, 5)
+en_all_TPM=glmTraining(Normal_all,'en', 10, 5)
+
+en_all_f2min=glmTraining(Normal_all_f2min,'en', 10, 5)
+```
+### C.2b Female only
+```{r}
+female_MinMax <-read.csv("./datasets/Normal_Female_MinMax.csv")
+en_female=glmTraining (female_MinMax,'en', 10, 5)
+
+```
+### C.2c Male only
+```{r}
+en_male=glmTraining (Male_MinMax,'en', 10, 5)
+```
+
+#C.4 only ImmDef Genes.
+### TPM model
+```{r}
+en_ImmDef_all_TPM=glmTraining (ImmDef_all,'en', 10, 5)
+```
+
+
+### min-max models
+```{r}
+en_ImmDef_all=glmTraining (all_immdef_minmax ,'en', 10, 5)
+
+en_ImmDef_male=glmTraining (male_immdef_minmax ,'en', 10, 5)
+
+en_ImmDef_female=glmTraining (female_immdef_minmax ,'en', 10, 5)
+
+en_ImmDef_female2=glmTraining (female_immdef_minmax_2 ,'en', 10, 5)
+
+```
+
+
+# D. Comparing Models
+
+## D.1 compare dev curves
+
+### compare different normalization
+```{r}
+model_list <- list(TPM=en_all_TPM, MinMax=en_all_minmax, log2=en_all_lg2,f2min=en_all_f2min)
+res <- resamples(model_list)
+summary(res)
+
+plot(en_all_TPM$finalModel, xvar = 'dev', label=T)
+plot(en_all_minmax$finalModel, xvar = 'dev', label=T)
+plot(en_all_lg2$finalModel, xvar = 'dev', label=T)
+plot(en_all_f2min$finalModel, xvar = 'dev', label=T)
+
+```
+
+## compar varImp 
+```{r}
+plot(varImp(en_all_TPM), top=20)
+plot(varImp(en_all_minmax), top=20)
+plot(varImp(en_all_lg2), top=20)
+plot(varImp(en_all_f2min), top=20)
+```
+
+
+### compare ImmDef models
+```{r}
+plot(en_ImmDef_all$finalModel, xvar = 'dev', label=T)
+plot(en_ImmDef_male$finalModel, xvar = 'dev', label=T)
+plot(en_ImmDef_female2$finalModel, xvar = 'dev', label=T)
+```
+### compare female dataset with or without WDah
+```{r}
+plot(varImp(en_ImmDef_all), top=15)
+plot(varImp(en_ImmDef_male), top=10)
+plot(varImp(en_ImmDef_female), top=10)
+plot(varImp(en_ImmDef_female2), top=10)
+
+```
+
+
+
+
+### compare WGnm models
+```{r}
+plot(en_all1)
+plot(en_all1$finalModel, xvar = 'lambda', label=T)
+plot(en_all1$finalModel, xvar = 'dev', label=T)
+plot(en_male)
+plot(en_male$finalModel, xvar = 'lambda', label=T)
+plot(en_male$finalModel, xvar = 'dev', label=T)
+```
+
+
+
+
+
+## D.2 Evaluation of Models based on resampling
+
+### D.2a Summary
+
+```{r}
+model_list <- list(WGnm_All=en_all1, WGnm_Male=en_male, ImmDef_All=en_ImmDef_all, ImmDef_Male=en_ImmDef_male,  ImmDef_F=en_ImmDef_female2)
+res <- resamples(model_list)
+summary(res)
+
+```
+
+### D.2b bwplot
+
+```{r}
+bwplot(res)
+```
+
+## D. 3 - Best coef genes
+
+#### coef output function
+```{r}
+output_coef <-function(model, file_name){
+best <- model$finalModel
+outcome<-coef(best, s=model$bestTune$lambda)
+write.csv(outcome[outcome[,1]!=0,], file_name)
+  
+}
+```
+
+#### WGnm models
+```{r}
+output_coef(en_all_TPM, "./coef/en_all_TPM.csv")
+output_coef(en_male, "./coef/en_male.csv")
+output_coef(en_all_lg2, "./coef/en_all_lg2.csv")
+output_coef(en_all_f2min, "./coef/en_all_f2min.csv")
+
+```
+### IMMDEF models
+```{r}
+output_coef(en_ImmDef_all, "./coef/en_ImmDef_all_minMax.csv")
+
+output_coef(en_ImmDef_female2, "./coef/en_ImmDef_female2_minmax.csv")
+output_coef(en_ImmDef_male, "./coef/en_ImmDef_male_minmax.csv")
+output_coef(en_ImmDef_all_TPM, "./coef/en_ImmDef_all_TPM.csv")
+```
+
+
+##D.4 predictions
+
+
+### D.4a -- prediction function
+
+
+```{r}
+En_predict <-function(model, data, filename){      ## data is the compelet dataset with sample variable columns 
+  evaluation<-dplyr::select(data,c(15,20:13684))
+  p_temp<-predict(model,evaluation)
+  
+  Predictions<-NULL
+  Predictions$Prediction<-p_temp
+  Predictions<- as.data.frame(Predictions)
+  Predictions$Age <-data$Age
+  Predictions$Sex <-data$Sex
+  Predictions$Tissue <-data$Tissue
+  Predictions$Notes <-data$Notes
+
+  write.csv(Predictions, filename, row.names = FALSE) 
+  
+}
+
+```
+
+
+
+###D.4b - high fat diet with TPM model
+
+```{r}
+SR_Allgex_HfatDiet_ND<-read.csv("./datasets/SRR_AllGex_HfatDiet_ND.csv",check.names = FALSE)
+
+
+En_predict(en_ImmDef_all_TPM,SR_Allgex_HfatDiet_ND,"./Predictions/HiFatND_ImmDef_allTPM_pred.csv")  ### model and data have to be on the same scale (normalization)
+
+##En_predict(en_all_TPM, SRR_AllGex_Hifat,"./Predictions/HiFatND_TPMall_pred.csv")
+
+```
+
+#### with min-max models
+
+```{r}
+
+En_predict(en_ImmDef_all, Higfat_ND_minmax,"./Predictions/HiFatND_ImmDef_allminmax_pred.csv") 
+
+En_predict(en_ImmDef_male, Higfat_ND_minmax,"./Predictions/HiFatND_ImmDef_male_minmax_pred.csv") 
+En_predict(en_ImmDef_female2, Higfat_ND_minmax,"./Predictions/HiFatND_ImmDef_female_minmax_pred.csv") 
+
+En_predict(en_all_minmax, Higfat_ND_minmax,"./Predictions/HiFatND_allminmax_pred.csv") 
+
+```
+
+```{r}
+if('dec-1' %in% colnames(Higfat_ND_minmax))
+{
+  cat("Yep, it's in there!\n");
+}
+```
+
+
+
+#E.Outputs
+
+#### E.1 Output important genes
+### function
+```{r}
+OutputGenes<-function (model, filename){
+  Importance<-as.data.frame(varImp(model)$importance) 
+    Importance<- tibble::rownames_to_column(Importance)
+  colnames(Importance)[1]<-"GeneSymbol"
+  colnames(Importance)[2]<-"Imp_value"
+  VarImpTable<-Importance[order(-Importance$Imp_value),]
+  write.csv(VarImpTable[1:200,],filename, row.names = FALSE)
+}
+
+```
+
+### output genes
+```{r}
+OutputGenes(en_all1,"./en_all_varimp.csv")
+OutputGenes(en_male,"./en_male_varimp.csv")
+
+OutputGenes(en_ImmDef_all,"./en_ImmDef_all_varimp.csv")
+OutputGenes(en_ImmDef_male,"./en_ImmDef_male_varimp.csv")
+OutputGenes(en_ImmDef_female,"./en_ImmDef_female_varimp.csv")
+OutputGenes(en_ImmDef_female2,"./en_ImmDef_female_2_varimp.csv")
+
+```
+
+### save the models 
+
+## WGnm models
+
+```{r}
+saveRDS(en_all_TPM, "./rds/en_all_TPM.rds")
+saveRDS(en_all_minmax, "./rds/en_all_minmax.rds")
+saveRDS(en_male, "./rds/en_male_minmax.rds")
+
+```
+
+
+
+## ImmDef models
+```{r}
+saveRDS(en_ImmDef_all, "./rds/en_ImmDef_all.rds" )
+saveRDS(en_ImmDef_female2, "./rds/en_ImmDef_female2.rds" )
+saveRDS(en_ImmDef_male, "./rds/en_ImmDef_male.rds" )
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+plot(cars)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
