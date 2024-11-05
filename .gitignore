@@ -3,3 +3,5 @@
 .RData
 .Ruserdata
 /nn/venv_DiAge
+*.code-workspace
+/nn/venv_DiAGE
